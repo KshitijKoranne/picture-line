@@ -2,6 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 	<key>CFBundleName</key><string>Picture-Line</string>
 	<key>CFBundleDisplayName</key><string>Picture-Line</string>
 	<key>CFBundleIdentifier</key><string>in.kjrlabs.pictureline</string>
@@ -14,8 +15,14 @@
 	<key>LSUIElement</key><true/>
 	<key>LSApplicationCategoryType</key><string>public.app-category.lifestyle</string>
 	<key>NSHumanReadableCopyright</key><string>© 2026 Kshitij Koranne</string>
-	<key>NSPhotoLibraryUsageDescription</key><string>Picture-Line clips a photo from this day in past years to your string.</string>
-	<key>NSLocationUsageDescription</key><string>Picture-Line uses your location to turn on the fairy lights at sunset.</string>
-	<key>NSLocationWhenInUseUsageDescription</key><string>Picture-Line uses your location to turn on the fairy lights at sunset.</string>
+	<key>NSPhotoLibraryUsageDescription</key><string>Picture-Line picks one photo taken on this day in earlier years and clips it to your string. Your photos never leave this Mac.</string>
+	<key>NSLocationUsageDescription</key><string>Picture-Line uses your rough location only to work out sunset, so the fairy lights come on at dusk. It stays on this Mac.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key><string>in.kjrlabs.pictureline</string>
+			<key>CFBundleURLSchemes</key><array><string>picture-line</string></array>
+		</dict>
+	</array>
 </dict>
 </plist>

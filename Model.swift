@@ -4,15 +4,16 @@ import ImageIO
 import UniformTypeIdentifiers
 
 let appName = "Picture-Line"
-let maxPhotos = 12 // ponytail: one cap until the paid tier exists (then free 7 / paid 12)
+let siteURL = URL(string: "https://picture-line.kjrlabs.in")!
+let supportEmail = "kjrlabs9@gmail.com"
+let onThisDayReady = false // ponytail: built and kept for a later update; switched off for 1.0
+
+/// Free: 5 photos, lights, breeze, nails. Unlocked: 12 photos, festivals, birthdays and every style. Samples never count.
+@MainActor var maxPhotos: Int { License.isPro ? 12 : 5 }
 
 let store: URL = {
-    let fm = FileManager.default
-    let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-    let url = base.appendingPathComponent(appName)
-    let old = base.appendingPathComponent("Memories") // MVP name
-    if !fm.fileExists(atPath: url.path), fm.fileExists(atPath: old.path) { try? fm.moveItem(at: old, to: url) }
-    try? fm.createDirectory(at: url, withIntermediateDirectories: true)
+    let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(appName)
+    try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     return url
 }()
 
@@ -22,7 +23,7 @@ let defaultSettings: [String: Any] = [
     "stringColor": "twine", "thickness": 2.2, "sag": 0.06,
     "lights": "sunset", "lightColor": "warm",
     "frame": "polaroid", "size": "medium", "clip": "wood",
-    "develop": "natural", "font": "Kalam-Regular",
+    "develop": "quick", "font": "Kalam-Regular",
     "breeze": true, "breezeStrength": 0.5,
     "onThisDay": true, "birthdays": true, "festival": "auto",
     "sounds": true, "volume": 0.6, "peek": "ctrlopt",
@@ -33,18 +34,22 @@ struct Config {
     var thickness, sag, breezeStrength, volume: Double
     var breeze, onThisDay, birthdays, sounds: Bool
 
-    static func load() -> Config {
-        let d = UserDefaults.standard
-        return Config(stringColor: d.string(forKey: "stringColor")!, lights: d.string(forKey: "lights")!,
-                      lightColor: d.string(forKey: "lightColor")!, frame: d.string(forKey: "frame")!,
-                      size: d.string(forKey: "size")!, clip: d.string(forKey: "clip")!,
-                      develop: d.string(forKey: "develop")!,
-                      font: handwritingFonts.contains { $0.1 == d.string(forKey: "font") } ? d.string(forKey: "font")! : "Kalam-Regular",
-                      festival: d.string(forKey: "festival")!, peek: d.string(forKey: "peek")!,
+    /// Styles are part of the unlock; a free copy always draws the default look whatever is stored.
+    @MainActor static func load() -> Config {
+        let d = UserDefaults.standard, pro = License.isPro
+        func s(_ k: String) -> String { d.string(forKey: k) ?? defaultSettings[k] as! String }
+        func style(_ k: String) -> String { pro ? s(k) : defaultSettings[k] as! String }
+        let font = style("font")
+        return Config(stringColor: style("stringColor"), lights: s("lights"),
+                      lightColor: s("lightColor"), frame: style("frame"),
+                      size: s("size"), clip: style("clip"),
+                      develop: s("develop"),
+                      font: handwritingFonts.contains { $0.1 == font } ? font : "Kalam-Regular",
+                      festival: pro ? s("festival") : "off", peek: s("peek"),
                       thickness: d.double(forKey: "thickness"), sag: d.double(forKey: "sag"),
                       breezeStrength: d.double(forKey: "breezeStrength"), volume: d.double(forKey: "volume"),
-                      breeze: d.bool(forKey: "breeze"), onThisDay: d.bool(forKey: "onThisDay"),
-                      birthdays: d.bool(forKey: "birthdays"), sounds: d.bool(forKey: "sounds"))
+                      breeze: d.bool(forKey: "breeze"), onThisDay: onThisDayReady && d.bool(forKey: "onThisDay"),
+                      birthdays: pro && d.bool(forKey: "birthdays"), sounds: d.bool(forKey: "sounds"))
     }
 
     var cardWidth: CGFloat { ["small": 116, "large": 176][size] ?? 144 }
@@ -68,32 +73,36 @@ struct PhotoRecord: Codable {
     var added = Date.distantPast
     var onThisDay = false
     var scale: Double? // this photo's size relative to the default (scroll over it to change)
+    var sample: Bool? // one of the bundled sample photos (new fields stay Optional so older files still decode)
 }
 
 enum Library {
     static let file = store.appendingPathComponent("photos.json")
 
     static func load() -> [PhotoRecord] {
-        if let data = try? Data(contentsOf: file), let r = try? JSONDecoder().decode([PhotoRecord].self, from: data) { return r }
-        // MVP stored [file, at] in the old app's defaults, on a 36-point string.
-        let old = UserDefaults(suiteName: "in.kjrlabs.memories")?.array(forKey: "photos") as? [[String: Any]] ?? []
-        return old.compactMap { d in
-            (d["file"] as? String).map { PhotoRecord(file: $0, at: (d["at"] as? Int ?? 18) * 60 / 36) }
-        }
+        guard let data = try? Data(contentsOf: file) else { return [] }
+        if let r = try? JSONDecoder().decode([PhotoRecord].self, from: data) { return r }
+        // Never overwrite a list we could not read: keep a copy for recovery.
+        try? data.write(to: store.appendingPathComponent("photos-\(Int(Date().timeIntervalSince1970)).bak.json"))
+        return []
     }
 
     static func save(_ r: [PhotoRecord]) { try? JSONEncoder().encode(r).write(to: file, options: .atomic) }
 }
 
 /// A photo's file: a name inside Application Support, or a full path for the bundled samples.
-func photoURL(_ file: String) -> URL { file.hasPrefix("/") ? URL(fileURLWithPath: file) : store.appendingPathComponent(file) }
+func photoURL(_ file: String) -> URL {
+    if file.hasPrefix("/"), file.contains("/Samples/sample-") { return URL(fileURLWithPath: file) }
+    return store.appendingPathComponent((file as NSString).lastPathComponent) // never outside our folder
+}
 
 /// The sample photos that ship with the app, with captions, for the welcome window and a first string.
 func samplePhotos() -> [(url: URL, caption: String)] {
-    let exe = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
-    let dir = [Bundle.main.resourceURL?.appendingPathComponent("Samples"), exe.appendingPathComponent("Samples"),
-               URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Samples")]
-        .compactMap { $0 }.first { FileManager.default.fileExists(atPath: $0.path) }
+    var dirs = [Bundle.main.resourceURL?.appendingPathComponent("Samples")]
+    #if DEBUG // dev builds run from the source folder
+    dirs.append(URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Samples"))
+    #endif
+    let dir = dirs.compactMap { $0 }.first { FileManager.default.fileExists(atPath: $0.path) }
     guard let dir else { return [] }
     return [(3, "Bruno"), (2, "Road trip"), (6, "By Mira, age 6"), (4, "Chai o'clock"), (7, "Sunday ride"),
             (5, "Up north"), (8, "Night market")]
@@ -151,8 +160,13 @@ func saveJPEG(_ img: CGImage) -> String? {
     return CGImageDestinationFinalize(dst) ? name : nil
 }
 
+nonisolated(unsafe) private var formatters: [String: DateFormatter] = [:]
+
+/// Formats with a cached formatter (this runs every second for the clock).
 func dayKey(_ d: Date, _ format: String = "yyyy-MM-dd") -> String {
+    if let f = formatters[format] { return f.string(from: d) }
     let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = format
+    formatters[format] = f
     return f.string(from: d)
 }
 

@@ -14,12 +14,18 @@ let desktopLevel = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIcon
     let loc = CLLocationManager()
     var optDown = false, lastOptTap = 0.0
     var timer: Timer?, hz = 0.0
+    var peekKeys: NSEvent.ModifierFlags = [.control, .option], keepInFront = false, frontUntil = 0.0
+    var paywallWin: NSWindow?
+    var unlockItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ n: Notification) {
         registerFonts()
         _ = cfg
         Sound.load()
-        win = NSWindow(contentRect: stringFrame(), styleMask: .borderless, backing: .buffered, defer: false)
+        // A non-activating panel: clicking a photo never pulls focus from the app you are working in.
+        let panel = NSPanel(contentRect: stringFrame(), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.hidesOnDeactivate = false; panel.becomesKeyOnlyIfNeeded = true
+        win = panel
         win.isOpaque = false; win.backgroundColor = .clear; win.hasShadow = false
         win.level = desktopLevel // on the wallpaper, under every app window
         win.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
@@ -27,6 +33,8 @@ let desktopLevel = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIcon
         win.contentView = view
         view.setup()
         buildMenu()
+        buildMainMenu()
+        readKeys()
         applyVisibility()
 
         setRate(60)
@@ -34,6 +42,9 @@ let desktopLevel = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIcon
         let nc = NotificationCenter.default
         nc.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.settingsChanged() }
+        }
+        nc.addObserver(forName: .licenseChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.settingsChanged(); self?.paywallWin?.close() }
         }
         nc.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -50,14 +61,24 @@ let desktopLevel = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIcon
         }
     }
 
+    func applicationWillTerminate(_ n: Notification) { if view.pendingSave { view.save() } }
+
+    /// picture-line://activate?key=… from the website's thank-you page.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        #if !APPSTORE
+        urls.forEach(License.handle)
+        #endif
+    }
+
     /// Opening the app again (Finder, Spotlight, Launchpad) shows Settings, as menu bar apps usually do.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         openSettings(); return false
     }
 
     func stringFrame() -> NSRect {
-        let s = (NSScreen.main ?? NSScreen.screens[0]).visibleFrame
-        return NSRect(x: s.minX, y: s.maxY - min(620, s.height), width: s.width, height: min(620, s.height))
+        // The built-in or primary display (the first screen), not whichever screen has focus right now.
+        let s = NSScreen.screens.first?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        return NSRect(x: s.minX, y: s.maxY - min(660, s.height), width: s.width, height: min(660, s.height))
     }
 
     func settingsChanged() {
@@ -65,15 +86,16 @@ let desktopLevel = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIcon
         cfg = Config.load()
         if old.sag != cfg.sag { view.updateLength() }
         if old.lights != cfg.lights { requestLocationIfNeeded() }
-        if old.festival != cfg.festival || old.lights != cfg.lights { view.refreshClock() }
+        if old.festival != cfg.festival || old.lights != cfg.lights { view.refreshClock(force: true) }
+        readKeys()
         if !old.onThisDay, cfg.onThisDay { onThisDay() }
         view.needsDisplay = true
     }
 
     @objc func tick() {
         let flags = NSEvent.modifierFlags.intersection([.shift, .control, .option, .command])
-        let peek: NSEvent.ModifierFlags = ["optcmd": [.option, .command], "ctrlshift": [.control, .shift]][cfg.peek] ?? [.control, .option]
-        let level: NSWindow.Level = UserDefaults.standard.bool(forKey: "onTop") || flags == peek ? .floating : desktopLevel
+        let front = keepInFront || flags == peekKeys || ProcessInfo.processInfo.systemUptime < frontUntil
+        let level: NSWindow.Level = front ? .floating : desktopLevel
         if win.level != level { win.level = level }
 
         let opt = flags == .option // double-tap ⌥ adds or removes a nail
@@ -86,7 +108,7 @@ let desktopLevel = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIcon
         if win.isVisible, win.occlusionState.contains(.visible) || view.lift.active || view.grabbed != nil {
             setRate(view.tick(hz: hz))
         } else {
-            view.idleTick(); setRate(4) // hidden, covered by a full-screen app, or the display is asleep
+            view.idleTick(); setRate(2) // hidden, covered by a full-screen app, or the display is asleep
         }
     }
 
@@ -95,8 +117,32 @@ let desktopLevel = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIcon
         guard r != hz else { return }
         hz = r; timer?.invalidate()
         let t = Timer(timeInterval: 1 / r, target: self, selector: #selector(tick), userInfo: nil, repeats: true)
-        t.tolerance = r >= 60 ? 0.002 : 0.2 / r
+        t.tolerance = r >= 60 ? 0.002 : 0.25 / r
         RunLoop.main.add(t, forMode: .common); timer = t
+    }
+
+    func readKeys() {
+        peekKeys = ["optcmd": [.option, .command], "ctrlshift": [.control, .shift]][cfg.peek] ?? [.control, .option]
+        keepInFront = UserDefaults.standard.bool(forKey: "onTop")
+    }
+
+    /// Copy, paste and close work in the caption editor and Settings (a menu bar app has no visible main menu).
+    func buildMainMenu() {
+        let edit = NSMenu(title: "Edit")
+        for (t, a, k) in [("Undo", Selector(("undo:")), "z"), ("Redo", Selector(("redo:")), "Z"), ("Cut", #selector(NSText.cut(_:)), "x"),
+                          ("Copy", #selector(NSText.copy(_:)), "c"), ("Paste", #selector(NSText.paste(_:)), "v"),
+                          ("Select All", #selector(NSText.selectAll(_:)), "a"), ("Close", #selector(NSWindow.performClose(_:)), "w")] {
+            edit.addItem(withTitle: t, action: a, keyEquivalent: k)
+        }
+        let main = NSMenu(); main.addItem(withTitle: "", action: nil, keyEquivalent: "").submenu = edit
+        NSApp.mainMenu = main
+    }
+
+    /// Brings the string out from behind your windows for a few seconds and gives it a gentle pluck.
+    @objc func findString() {
+        if UserDefaults.standard.bool(forKey: "hidden") { UserDefaults.standard.set(false, forKey: "hidden"); applyVisibility() }
+        frontUntil = ProcessInfo.processInfo.systemUptime + 8
+        view.pluck()
     }
 
     /// Closed windows are let go, so SwiftUI does not hold their memory.
@@ -105,6 +151,7 @@ let desktopLevel = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIcon
         if w === settingsWin { settingsWin = nil }
         if w === editWin { editWin = nil }
         if w === welcomeWin { welcomeWin = nil }
+        if w === paywallWin { paywallWin = nil }
     }
 
     // MARK: menu bar
@@ -116,13 +163,15 @@ let desktopLevel = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIcon
         func add(_ title: String, _ action: Selector?, _ key: String = "") -> NSMenuItem {
             let i = m.addItem(withTitle: title, action: action, keyEquivalent: key); i.target = self; return i
         }
+        _ = add("Find My String", #selector(findString), "f")
         _ = add("Add Photos…", #selector(addPhotos), "o")
         m.addItem(.separator())
-        onTopItem = add("Keep String in Front", #selector(toggleOnTop))
+        onTopItem = add("Keep String in Front of Windows", #selector(toggleOnTop))
         hideItem = add("Hide String", #selector(toggleHidden))
         hintItem = add("", nil); hintItem.isEnabled = false
         m.addItem(.separator())
-        _ = add("Share a Picture of My String…", #selector(shareString))
+        // Share My String… comes in a later update (shareString below is ready).
+        unlockItem = add("Unlock Picture-Line…", #selector(showPaywall))
         _ = add("Settings…", #selector(openSettings), ",")
         _ = add("About \(appName)", #selector(about))
         m.addItem(.separator())
@@ -133,11 +182,22 @@ let desktopLevel = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIcon
     func menuWillOpen(_ menu: NSMenu) {
         let d = UserDefaults.standard
         onTopItem.state = d.bool(forKey: "onTop") ? .on : .off
-        hideItem.state = d.bool(forKey: "hidden") ? .on : .off
-        hintItem.title = "Hold \(["optcmd": "⌥⌘", "ctrlshift": "⌃⇧"][cfg.peek] ?? "⌃⌥") to bring the string to the front"
+        hideItem.title = d.bool(forKey: "hidden") ? "Show String" : "Hide String"
+        hintItem.title = "Hold \(["optcmd": "⌥⌘", "ctrlshift": "⌃⇧"][cfg.peek] ?? "⌃⌥") to peek at your string"
+        unlockItem.isHidden = License.isPro
     }
 
-    @objc func toggleOnTop() { UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "onTop"), forKey: "onTop") }
+    @objc func toggleOnTop() { UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "onTop"), forKey: "onTop"); readKeys() }
+
+    @objc func showPaywall() {
+        if paywallWin == nil {
+            let w = NSWindow(contentViewController: NSHostingController(rootView: PaywallView { [weak self] in self?.paywallWin?.close() }))
+            w.styleMask = [.titled, .closable, .fullSizeContentView]; w.titlebarAppearsTransparent = true; w.titleVisibility = .hidden
+            w.isReleasedWhenClosed = false; w.delegate = self; w.level = .floating
+            paywallWin = w; w.center()
+        }
+        NSApp.activate(); paywallWin!.makeKeyAndOrderFront(nil)
+    }
     @objc func toggleHidden() { UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "hidden"), forKey: "hidden"); applyVisibility() }
 
     func applyVisibility() {
@@ -208,6 +268,7 @@ let desktopLevel = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIcon
             if samples, let view = self?.view, view.photos.isEmpty { view.hangSamples() }
             self?.welcomeWin?.close()
             self?.requestLocationIfNeeded(); self?.onThisDay()
+            self?.findString() // show them where it lives
         }
         let w = NSWindow(contentViewController: NSHostingController(rootView: v))
         w.styleMask = [.titled, .closable, .fullSizeContentView]; w.titlebarAppearsTransparent = true; w.titleVisibility = .hidden
@@ -239,7 +300,7 @@ let desktopLevel = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIcon
     // MARK: On this day
 
     @objc func onThisDay() {
-        guard cfg.onThisDay, UserDefaults.standard.bool(forKey: "welcomed") else { return }
+        guard onThisDayReady, cfg.onThisDay, UserDefaults.standard.bool(forKey: "welcomed") else { return }
         let today = dayKey(Date())
         guard UserDefaults.standard.string(forKey: "otdDay") != today, Calendar.current.component(.hour, from: Date()) >= 6 else { return }
         let view = self.view!

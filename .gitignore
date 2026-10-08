@@ -4,3 +4,5 @@ snaps/
 check.png
 Samples-raw/
 .DS_Store
+build/
+dist/

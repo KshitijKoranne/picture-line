@@ -30,7 +30,8 @@ struct Particle {
     var grabbed: Int?, grabOffset = CGPoint.zero, dragged: Photo?, pressed: Photo?
     var pressTime = 0.0, downAt = CGPoint.zero, moved: CGFloat = 0
     var mouse = CGPoint(x: -999, y: -999), lastMouse = CGPoint(x: -999, y: -999)
-    var time = 0.0, lastClock = 0.0, lastDevStep = -1
+    var time = 0.0, lastClock = 0.0, lastSky = -999.0, lastDevStep = -1, motion: CGFloat = 1, away = false
+    var lastNear = 0.0, awake = true
     var lightLevel: CGFloat = 0, breeze: CGFloat = 0, night = false, idle = false
     var festival: Festival?, todayMD = ""
     var toast: (text: String, until: Double)?
@@ -38,12 +39,13 @@ struct Particle {
     let lift = LiftController()
     var pendingSave = false
     var backdrop = false // snapshots only: paint a wallpaper behind the string
+    var backdropImage: CGImage?
 
     override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for e: NSEvent?) -> Bool { true }
 
     func setup() {
-        photos = Library.load().compactMap { Photo($0) }
+        photos = Library.load().compactMap { var r = $0; r.at = min(n - 3, max(2, r.at)); return Photo(r) }
         registerForDraggedTypes(NSFilePromiseReceiver.readableDraggedTypes.map { NSPasteboard.PasteboardType($0) }
                                 + [.fileURL, .tiff, .png])
         layoutRope()
@@ -84,7 +86,13 @@ struct Particle {
         guard demo else { return }
         ownTimer?.invalidate(); ownTimer = nil
         if window != nil {
-            let t = Timer(timeInterval: 1 / 60, repeats: true) { [weak self] _ in MainActor.assumeIsolated { _ = self?.tick(hz: 60) } }
+            let t = Timer(timeInterval: 1 / 60, repeats: true) { [weak self] t in
+                MainActor.assumeIsolated {
+                    guard let self, self.window?.isVisible == true else { return t.invalidate() } // stops with the welcome window
+                    _ = self.tick(hz: 60)
+                }
+            }
+            t.tolerance = 0.002
             RunLoop.main.add(t, forMode: .common); ownTimer = t
         }
     }
@@ -96,7 +104,7 @@ struct Particle {
         let saved = UserDefaults.standard.dictionary(forKey: "pins") as? [String: [Double]] ?? [:]
         pins = [:]
         for (k, v) in saved where v.count == 2 {
-            if let i = Int(k) { pins[i] = CGPoint(x: v[0] * bounds.width, y: v[1] * bounds.height) }
+            if let i = Int(k), (0..<n).contains(i) { pins[i] = clampPin(CGPoint(x: v[0] * bounds.width, y: v[1] * bounds.height)) }
         }
         if pins[0] == nil { pins[0] = CGPoint(x: bounds.width * 0.04, y: 46) }
         if pins[n - 1] == nil { pins[n - 1] = CGPoint(x: bounds.width * 0.96, y: 46) }
@@ -138,7 +146,7 @@ struct Particle {
     func pinNear(_ m: CGPoint, _ d: CGFloat) -> Int? { pins.filter { ($0.value - m).len <= d }.min { $0.key < $1.key }?.key }
 
     func toggleNail() {
-        guard dragged == nil, pressed == nil, let i = grabbed ?? nearestPoint(mouse, within: 30) else { return }
+        guard dragged == nil, pressed == nil, let i = grabbed else { return } // only while you hold the string
         if pins[i] != nil { removeNail(i) } else { addNail(i) }
     }
 
@@ -188,13 +196,15 @@ struct Particle {
 
     // MARK: clock (once a second)
 
-    func refreshClock() {
+    func refreshClock(force: Bool = false) {
         if pendingSave { pendingSave = false; save() }
-        night = Sky.isNight()
-        festival = currentFestival(cfg.festival)
-        todayMD = dayKey(Date(), "MM-dd")
-        idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!) > 40
-        for p in photos where isBirthday(p) && time - (burst[p.r.id] ?? -9999) > 1800 {
+        let md = dayKey(Date(), "MM-dd")
+        if force || md != todayMD { todayMD = md; festival = currentFestival(cfg.festival) }
+        if force || time - lastSky > 30 { lastSky = time; night = Sky.isNight() }
+        let still = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+        idle = still > 40 && still < 240 // a few minutes of breeze while someone may be looking
+        away = still >= 600 // nobody at the Mac: everything holds still
+        for p in photos where !away && isBirthday(p) && time - (burst[p.r.id] ?? -9999) > 1800 {
             burst[p.r.id] = time; confetti(at: cardCenter(p) - CGPoint(x: 0, y: p.layout.size.height / 2))
         }
     }
@@ -203,32 +213,47 @@ struct Particle {
 
     // MARK: frame
 
-    /// One timer tick at `hz` frames a second: runs the physics at a steady 60 steps a second, redraws only what changed,
-    /// and returns the rate it wants next. 60 while anything moves or the pointer is close, 30 for snow, flames and breeze,
-    /// 15 for twinkling lights, 15 with no drawing at all when the string is still. Keeps a resting Mac cool.
+    /// One timer tick at `hz`. Physics runs at 60 steps a second only while something can move; the view redraws only
+    /// what changed; and the tick returns the rate it wants next: 60 while you touch or swing things, 20 for breeze,
+    /// snow and flames, 10 for glowing lights, 5 when the string is at rest. A resting string costs next to nothing.
     func tick(hz: Double) -> Double {
-        if let w = window { mouse = convert(w.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil) }
         let now = ProcessInfo.processInfo.systemUptime
         if now - lastClock > 1 { lastClock = now; refreshClock() }
-        for _ in 0..<max(1, Int((60 / hz).rounded())) { step() }
-        lift.tick()
-
-        let box = contentBox()
-        let motion = zip(pts, old).reduce(CGFloat(0)) { max($0, ($1.0 - $1.1).len) }
-        let busy = grabbed != nil || pressed != nil || dragged != nil || lift.active || motion > 0.03
-            || box.insetBy(dx: -30, dy: -30).contains(mouse)
-            || photos.contains { abs($0.spin) > 0.01 || abs($0.flip - $0.flipTarget) > 0.001 }
+        let interacting = grabbed != nil || pressed != nil || dragged != nil || lift.active
+        if let w = window { // the pointer only counts when it is over this window, not over an app window above it
+            let s = NSEvent.mouseLocation
+            let mine = demo || interacting || NSWindow.windowNumber(at: s, belowWindowWithWindowNumber: 0) == w.windowNumber
+            mouse = mine ? convert(w.convertPoint(fromScreen: s), from: nil) : CGPoint(x: -9999, y: -9999)
+        }
+        let near = nearestPoint(mouse, within: 80) != nil
+            || photos.contains { !$0.lifted && (cardCenter($0) - mouse).len < $0.layout.size.height * 0.8 }
+        if near || interacting { lastNear = time }
+        awake = time - lastNear < 20 // twinkle, flames and snow play while you are around, then hold still
         let lightsTarget: CGFloat = (cfg.lights == "always" || (cfg.lights == "sunset" && night)) ? 1 : 0
         let lively = !particles.isEmpty || breeze > 0.01 || toast != nil || abs(lightLevel - lightsTarget) > 0.001
-            || festival == .diwali || festival == .christmas || festival == .holi || photos.contains { isBirthday($0) }
-        let devStep = photos.reduce(0) { $0 + Int($1.developed * 40) }
-        let twinkle = lightLevel > 0.01 && cfg.lights != "off"
+            || (awake && (festival == .diwali || festival == .christmas || festival == .holi || photos.contains { isBirthday($0) }))
+        let spinning = photos.contains { abs($0.spin) > 0.01 || abs($0.flip - $0.flipTarget) > 0.001 }
 
-        if busy || lively || twinkle || devStep != lastDevStep {
+        if interacting || near || lively || spinning || motion > 0.01 {
+            for _ in 0..<max(1, Int((60 / hz).rounded())) { step() }
+            motion = zip(pts, old).reduce(CGFloat(0)) { max($0, ($1.0 - $1.1).len) }
+        } else {
+            time += 1 / hz // at rest: no physics at all
+        }
+        lift.tick()
+
+        let moving = motion > 0.02 || spinning
+        let twinkle = awake && lightLevel > 0.01
+        let devStep = photos.reduce(0) { $0 + Int($1.developed * 40) }
+        if interacting || moving || lively || twinkle || devStep != lastDevStep {
+            let box = contentBox()
             setNeedsDisplay(box.union(lastDirty))
             lastDirty = box; lastDevStep = devStep
         }
-        return busy ? 60 : lively ? 30 : 15
+        if interacting || near { return 60 }
+        if lively { return 20 }
+        if moving { return 60 }
+        return twinkle ? 10 : 5
     }
 
     /// Hidden or fully covered: keep the clock going, skip physics and drawing.
@@ -258,7 +283,7 @@ struct Particle {
         let wind = breeze * CGFloat(cfg.breezeStrength) * 260
             * CGFloat(sin(time * 0.55) * 0.55 + sin(time * 1.33 + 1.2) * 0.3 + sin(time * 0.21 + 2) * 0.35)
 
-        if let p = pressed, !p.lifted, moved <= 5, time - pressTime > 0.32 { startLift(p) }
+        if let p = pressed, !p.lifted, moved <= 5, time - pressTime > 0.45 { startLift(p) }
         if let p = dragged { p.r.at = index(near: mouse + grabOffset); grabbed = p.r.at }
 
         var weight = [Int: CGFloat]()
@@ -309,12 +334,12 @@ struct Particle {
 
     func updateParticles(_ dt: CGFloat) {
         let snowing = festival == .christmas || festival == .winter
-        if snowing, particles.count < 170, Double.random(in: 0...1) < 0.5 {
+        if snowing, awake, particles.count < 170, Double.random(in: 0...1) < 0.5 {
             particles.append(Particle(p: CGPoint(x: .random(in: 0...bounds.width), y: -6),
                                       v: CGPoint(x: .random(in: -8...8), y: .random(in: 22...40)),
                                       life: 40, kind: .snow, color: .white, size: .random(in: 1.3...3.2)))
         }
-        if festival == .holi, time > nextPuff, let i = (2..<n - 2).randomElement() {
+        if festival == .holi, awake, time > nextPuff, let i = (2..<n - 2).randomElement() {
             nextPuff = time + .random(in: 0.8...1.8); puff(at: pts[i])
         }
         for i in 0..<n { // snow settles on the string, melts slowly, falls off when shaken
@@ -361,7 +386,16 @@ struct Particle {
                                   life: 5, kind: .puff, color: holiColors.randomElement()!, size: 10))
     }
 
-    func showToast(_ s: String) { toast = (s, time + 2.8) }
+    func showToast(_ s: String) { toast = (s, time + 3.2); motion = 1 }
+
+    /// A gentle pluck: a wave runs along the string and every photo sways. Used by Find My String.
+    func pluck() {
+        for i in 1..<n - 1 where pins[i] == nil { old[i].y += sin(CGFloat(i) / CGFloat(n - 1) * .pi) * 7 }
+        for p in photos { p.spin += .random(in: -1.6...1.6) }
+        motion = 1
+        let keys = ["optcmd": "⌥⌘", "ctrlshift": "⌃⇧"][cfg.peek] ?? "⌃⌥"
+        showToast("Your string lives here, behind your windows. Hold \(keys) to peek.")
+    }
 
     // MARK: drawing
 
@@ -394,18 +428,25 @@ struct Particle {
 
     override func draw(_ dirty: NSRect) {
         guard let c = NSGraphicsContext.current?.cgContext, !pts.isEmpty else { return }
-        if backdrop {
+        if backdrop, let b = backdropImage {
+            putFill(c, b, bounds)
+        } else if backdrop {
             let g = CGGradient(colorsSpace: nil, colors: [rgb(0.18, 0.28, 0.44), rgb(0.52, 0.42, 0.48)] as CFArray, locations: [0, 1])!
             c.drawLinearGradient(g, start: .zero, end: CGPoint(x: 0, y: bounds.height), options: [])
         }
         let rope = ropePath(), th = CGFloat(cfg.thickness)
         c.setLineCap(.round); c.setLineJoin(.round)
 
-        // ponytail: near-invisible wide band so clicks and drops land on the string; the rest of the window clicks through
-        c.addPath(rope); c.setLineWidth(40); c.setStrokeColor(rgb(1, 1, 1, 0.005)); c.strokePath()
+        // ponytail: near-invisible wide band so clicks and drops land on the string; the rest of the window clicks through.
+        // Left out while the string is kept in front, so it never blocks the windows underneath.
+        if window?.level != .floating || demo {
+            c.addPath(rope); c.setLineWidth(40); c.setStrokeColor(rgb(1, 1, 1, 0.005)); c.strokePath()
+        }
 
+        c.saveGState() // a soft offset shadow, drawn without blur (blur across the whole width costs every frame)
+        c.translateBy(x: 0, y: 2.5); c.addPath(rope); c.setLineWidth(th + 1.6); c.setStrokeColor(rgb(0, 0, 0, 0.16)); c.strokePath()
+        c.restoreGState()
         c.saveGState()
-        c.setShadow(offset: CGSize(width: 0, height: -3), blur: 4, color: rgb(0, 0, 0, 0.35))
         if festival == .holi {
             for i in 0..<n - 1 {
                 c.move(to: pts[i]); c.addLine(to: pts[i + 1]); c.setLineWidth(th)
@@ -429,7 +470,7 @@ struct Particle {
         if cfg.lights != "off" { // fairy lights
             for (k, p) in lightPoints().enumerated() {
                 let col = cfg.lightColor == "multi" ? lightColors[k % lightColors.count] : warmLight
-                let lit = lightLevel * CGFloat(0.78 + 0.22 * sin(time * 1.7 + Double(k) * 2.3))
+                let lit = lightLevel * (awake ? CGFloat(0.78 + 0.22 * sin(time * 1.7 + Double(k) * 2.3)) : 0.9)
                 let b = p + CGPoint(x: 0, y: 5)
                 glow(c, b, col, 20, 0.55 * lit)
                 c.setFillColor(rgb(0.12, 0.25, 0.14)); c.fill(CGRect(x: p.x - 1.6, y: p.y, width: 3.2, height: 2.6))
@@ -494,12 +535,17 @@ struct Particle {
             }
         }
 
-        if photos.isEmpty || toast != nil { // hint and toast text sit under the middle of the string
+        if let t = toast { // a small dark capsule, readable on any wallpaper
+            let mid = pts[n / 2]
+            let s = NSAttributedString(string: t.text, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium), .foregroundColor: NSColor.white])
+            let sz = s.size(), r = CGRect(x: mid.x - sz.width / 2 - 14, y: mid.y + 30, width: sz.width + 28, height: sz.height + 12)
+            c.setFillColor(rgb(0.08, 0.08, 0.1, 0.82)); c.addPath(CGPath(roundedRect: r, cornerWidth: r.height / 2, cornerHeight: r.height / 2, transform: nil)); c.fillPath()
+            s.draw(at: CGPoint(x: r.minX + 14, y: r.minY + 6))
+        } else if photos.isEmpty && !demo { // hint under the middle of the string
             let mid = pts[n / 2]
             let shadow = NSShadow(); shadow.shadowBlurRadius = 4; shadow.shadowColor = NSColor(white: 0, alpha: 0.6)
-            let lines: [(String, NSFont)] = toast.map { [($0.text, NSFont.systemFont(ofSize: 15, weight: .medium))] }
-                ?? [("Drag a photo here", wordmark(26)),
-                    ("Someone you'd like to see every day.", NSFont.systemFont(ofSize: 13, weight: .medium))]
+            let lines: [(String, NSFont)] = [("Drag a photo here", wordmark(26)),
+                                             ("Someone you'd like to see every day.", NSFont.systemFont(ofSize: 13, weight: .medium))]
             var y = mid.y + 26
             for (text, font) in lines {
                 let s = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: NSColor(white: 1, alpha: 0.92), .shadow: shadow])
@@ -567,6 +613,9 @@ struct Particle {
     override func mouseDragged(with e: NSEvent) {
         moved = max(moved, (convert(e.locationInWindow, from: nil) - downAt).len)
         if let p = pressed, !p.lifted, moved > 5 { dragged = p; pressed = nil }
+        if let p = pressed, p.lifted, moved > 24 { // dragging a lifted photo puts it back and moves it instead
+            lift.release(to: screenPoint(cardCenter(p)), angle: p.angle); dragged = p; pressed = nil
+        }
     }
 
     override func mouseUp(with e: NSEvent) {
@@ -621,7 +670,7 @@ struct Particle {
         }
         if let p = photo(at: m) {
             item("Edit Caption & Note…", #selector(editPhoto(_:)), p)
-            item(p.flipTarget > 0.5 ? "Show Front" : "Show Back", #selector(flipPhoto(_:)), p)
+            item("Turn Over", #selector(flipPhoto(_:)), p)
             let sizeMenu = NSMenu(), current = p.r.scale ?? 1
             let nearest = Self.sizes.min { abs($0.1 - current) < abs($1.1 - current) }!.1
             for (name, k) in Self.sizes {
@@ -644,8 +693,27 @@ struct Particle {
 
     @objc func editPhoto(_ s: NSMenuItem) { if let p = s.representedObject as? Photo { (NSApp.delegate as? App)?.edit(p) } }
     @objc func flipPhoto(_ s: NSMenuItem) { if let p = s.representedObject as? Photo { p.flipTarget = 1 - p.flipTarget; Sound.rustle(0.6) } }
-    @objc func keepPhoto(_ s: NSMenuItem) { if let p = s.representedObject as? Photo { p.r.onThisDay = false; save() } }
-    @objc func removePhoto(_ s: NSMenuItem) { if let p = s.representedObject as? Photo { remove(p) } }
+    @objc func keepPhoto(_ s: NSMenuItem) {
+        guard let p = s.representedObject as? Photo else { return }
+        guard roomLeft > 0 else { return (NSApp.delegate as? App)?.showPaywall() ?? () }
+        p.r.onThisDay = false; save()
+    }
+
+    @objc func removePhoto(_ s: NSMenuItem) {
+        guard let p = s.representedObject as? Photo else { return }
+        if !p.r.caption.isEmpty || !p.r.note.isEmpty, p.r.sample != true { // words would be lost: ask first
+            let a = NSAlert()
+            a.messageText = "Take this photo down?"
+            a.informativeText = "Its caption and note will be lost."
+            a.addButton(withTitle: "Take Down"); a.addButton(withTitle: "Cancel")
+            NSApp.activate()
+            guard a.runModal() == .alertFirstButtonReturn else { return }
+        }
+        remove(p)
+    }
+
+    /// Photos the user can still add. Samples and today's On-this-day photo never count.
+    var roomLeft: Int { maxPhotos - photos.filter { $0.r.sample != true && !$0.r.onThisDay }.count }
     @objc func addNailItem(_ s: NSMenuItem) { if let i = s.representedObject as? Int { addNail(i) } }
     @objc func removeNailItem(_ s: NSMenuItem) { if let i = s.representedObject as? Int { removeNail(i) } }
 
@@ -658,13 +726,16 @@ struct Particle {
     // MARK: adding photos
 
     @discardableResult
-    func add(_ img: CGImage, date: Date?, near q: CGPoint, onThisDay: Bool = false, edit: (inout PhotoRecord) -> Void = { _ in }) -> Bool {
-        if !onThisDay, photos.filter({ !$0.r.onThisDay }).count >= maxPhotos {
-            showToast("The string is full — \(maxPhotos) photos at most"); NSSound.beep(); return false
+    func add(_ img: CGImage, date: Date?, near q: CGPoint, onThisDay: Bool = false, isSample: Bool = false,
+             edit: (inout PhotoRecord) -> Void = { _ in }) -> Bool {
+        if !onThisDay, !isSample, roomLeft <= 0 {
+            if !License.isPro { (NSApp.delegate as? App)?.showPaywall(); return false }
+            showToast("Your string is full. Take one down to hang another."); return false
         }
+        if !isSample, let oldest = photos.first(where: { $0.r.sample == true }) { remove(oldest) } // your photos replace the samples
         guard let file = saveJPEG(img) else { return false }
         var r = PhotoRecord(file: file, at: freeIndex(near: q))
-        r.date = date; r.added = Date(); r.onThisDay = onThisDay
+        r.date = date; r.added = Date(); r.onThisDay = onThisDay; r.sample = isSample ? true : nil
         edit(&r)
         guard let p = Photo(r) else { return false }
         p.spin = .random(in: -3...3)
@@ -690,15 +761,17 @@ struct Particle {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6 + Double(k) * 0.45) { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self, let img = loadImage(s.url, max: 1600) else { return }
-                    self.add(img, date: nil, near: self.pts[[12, 22, 31, 40, 49][k]]) { r in
+                    self.add(img, date: nil, near: self.pts[[12, 22, 31, 40, 49][k]], isSample: true) { r in
                         r.caption = s.caption
                         r.added = Date() - max(0, cfg.developSeconds - 6) // develops in the last few seconds
                     }
                 }
             }
         }
-        showToast("Sample photos. Right-click one to remove it.")
+        showToast("These are samples. Drag in your own photos and they take their place.")
     }
+
+    var samplesHung: Int { photos.filter { $0.r.sample == true }.count }
 
     func removeOnThisDay() { for p in photos where p.r.onThisDay { remove(p) } }
 
@@ -711,7 +784,7 @@ struct Particle {
         if let urls = pb.readObjects(forClasses: [NSURL.self], options: [
             .urlReadingFileURLsOnly: true, .urlReadingContentsConformToTypes: [UTType.image.identifier],
         ]) as? [URL], !urls.isEmpty {
-            for (k, u) in urls.enumerated() { addFile(u, near: spot(k)) }
+            for (k, u) in urls.enumerated() where k < max(1, roomLeft + samplesHung) { addFile(u, near: spot(k)) }
             return true
         }
         if let promises = pb.readObjects(forClasses: [NSFilePromiseReceiver.self]) as? [NSFilePromiseReceiver], !promises.isEmpty {
@@ -719,7 +792,10 @@ struct Particle {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             for (k, promise) in promises.enumerated() { // e.g. dragged from the Photos app
                 promise.receivePromisedFiles(atDestination: dir, options: [:], operationQueue: .main) { url, error in
-                    MainActor.assumeIsolated { if error == nil { self.addFile(url, near: spot(k)) } }
+                    MainActor.assumeIsolated {
+                        if error == nil { self.addFile(url, near: spot(k)) } else { self.showToast("That photo is still downloading from iCloud. Try again in a moment.") }
+                        try? FileManager.default.removeItem(at: url) // the copy we were given is no longer needed
+                    }
                 }
             }
             return true
@@ -741,6 +817,7 @@ struct Particle {
 
     func show(_ p: Photo, image: CGImage, back: Bool, holi: Bool, screen: NSScreen, from: CGPoint, size: CGSize,
               angle: CGFloat, done: @escaping () -> Void) {
+        let previous = self.done; self.done = nil; previous?() // a photo still on its way back goes home first
         let f = screen.frame, aspect = size.width / size.height
         let w = min(f.width * 0.55, f.height * 0.74 * aspect)
         guard let card = renderCard(p, width: w, image: image, back: back, develop: p.developed, holi: holi,
@@ -768,9 +845,8 @@ struct Particle {
 
     func tick() {
         guard let w = win, w.isVisible else { return }
-        t += (target - t) * 0.2
-        view.t = t; view.needsDisplay = true
-        if target == 0, t < 0.015 { w.orderOut(nil); view.card = nil; let d = done; done = nil; d?() }
+        if abs(target - t) < 0.002 { t = target } else { t += (target - t) * 0.2; view.t = t; view.needsDisplay = true }
+        if target == 0, t < 0.015 { w.orderOut(nil); view.card = nil; win = nil; let d = done; done = nil; d?() }
     }
 }
 

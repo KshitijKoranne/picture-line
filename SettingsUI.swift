@@ -79,10 +79,17 @@ struct SettingsView: View {
     @AppStorage("volume") var volume = 0.6
     @AppStorage("peek") var peek = "ctrlopt"
     @State var login = SMAppService.mainApp.status == .enabled
+    @State var pro = License.isPro
+
+    /// A style setting: free copies keep the default and see the unlock sheet when they pick another.
+    func gated<T: Equatable>(_ b: Binding<T>, _ free: T) -> Binding<T> {
+        Binding(get: { pro ? b.wrappedValue : free },
+                set: { v in if pro || v == free { b.wrappedValue = v } else { (NSApp.delegate as? App)?.showPaywall() } })
+    }
 
     static let panes = [
         Pane(title: "General", icon: "gearshape.fill", color: .gray, blurb: "How Picture-Line starts, sounds and stays out of your way."),
-        Pane(title: "String", icon: "point.topleft.down.to.point.bottomright.curvepath.fill", color: .orange, blurb: "The cord itself, its nails and its fairy lights."),
+        Pane(title: "String", icon: "point.topleft.down.to.point.bottomright.curvepath.fill", color: .orange, blurb: "The string itself, its nails and its fairy lights."),
         Pane(title: "Photos", icon: "photo.fill.on.rectangle.fill", color: .blue, blurb: "Frames, clips and the handwriting on them."),
         Pane(title: "Moments", icon: "sparkles", color: .pink, blurb: "Small surprises through the day and the year."),
         Pane(title: "About", icon: "heart.fill", color: .red, blurb: "Made with care in Vadodara, India."),
@@ -108,10 +115,14 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .onReceive(NotificationCenter.default.publisher(for: .licenseChanged)) { _ in pro = License.isPro }
     }
 
-    func row(_ title: String, _ icon: String, _ color: Color) -> some View {
-        Label { Text(title) } icon: { Badge(icon, color) }
+    func row(_ title: String, _ icon: String = "", _ color: Color = .clear, unlock: Bool = false) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+            if unlock && !pro { Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.secondary).help("Part of the unlock") }
+        }
     }
 
     @ViewBuilder var general: some View {
@@ -122,7 +133,7 @@ struct SettingsView: View {
                     catch { login = SMAppService.mainApp.status == .enabled }
                 }
             Picker(selection: $peek) {
-                Text("⌃ ⌥").tag("ctrlopt"); Text("⌥ ⌘").tag("optcmd"); Text("⌃ ⇧").tag("ctrlshift")
+                Text("Control-Option  ⌃⌥").tag("ctrlopt"); Text("Option-Command  ⌥⌘").tag("optcmd"); Text("Control-Shift  ⌃⇧").tag("ctrlshift")
             } label: { row("Hold to bring to front", "square.3.layers.3d.top.filled", .indigo) }
         } footer: {
             Text("The string sits on your desktop, behind your windows. Hold these keys to see it in front.")
@@ -143,8 +154,8 @@ struct SettingsView: View {
     @ViewBuilder var string: some View {
         Section {
             LabeledContent {
-                Swatches(selection: $stringColor, options: ["twine", "red", "white", "black", "gold"].map { Swatch(id: $0, color: stringColors[$0]!) })
-            } label: { row("Colour", "paintpalette.fill", .orange) }
+                Swatches(selection: gated($stringColor, "twine"), options: ["twine", "red", "white", "black", "gold"].map { Swatch(id: $0, color: stringColors[$0]!) })
+            } label: { row("Colour", unlock: true) }
             LabeledContent {
                 Slider(value: $thickness, in: 1.2...4) { EmptyView() } minimumValueLabel: { Text("Thin") } maximumValueLabel: { Text("Thick") }
                     .frame(width: 230)
@@ -164,33 +175,32 @@ struct SettingsView: View {
             .disabled(lights == "off")
         } footer: { Text("“On at sunset” uses your rough location once, to know when the sun goes down where you are.") }
         Section {
-            LabeledContent { Text("Pull the string, double-tap ⌥").foregroundStyle(.secondary) } label: { row("Add a nail", "pin.fill", .gray) }
             LabeledContent {
                 HStack {
                     Button("Remove All Nails") { NotificationCenter.default.post(name: .removeNails, object: nil) }
                     Button("Reset String") { NotificationCenter.default.post(name: .resetString, object: nil) }
                 }
             } label: { row("Start over", "arrow.counterclockwise", .gray) }
-        } footer: { Text("Drag a nail, or either end of the string, to move it. Right-click a nail to take it out.") }
+        } footer: { Text("To add a nail, hold the string where you want it and double-tap ⌥. Drag a nail, or either end of the string, to move it. Right-click a nail to take it out.") }
     }
 
     @ViewBuilder var photos: some View {
         Section {
-            Picker(selection: $frame) {
+            Picker(selection: gated($frame, "polaroid")) {
                 Text("Instant").tag("polaroid"); Text("Classic").tag("classic"); Text("Borderless").tag("bare")
-            } label: { row("Frame", "rectangle.portrait.fill", .blue) }
+            } label: { row("Frame", unlock: true) }
             Picker(selection: $size) {
                 Text("Small").tag("small"); Text("Medium").tag("medium"); Text("Large").tag("large")
             } label: { row("Default size", "arrow.up.left.and.arrow.down.right", .cyan) }
             LabeledContent {
-                Swatches(selection: $clip, options: ["wood", "red", "blue", "mint", "pink", "black"].map { Swatch(id: $0, color: clipColors[$0]!.0) })
-            } label: { row("Clips", "paperclip", .brown) }
+                Swatches(selection: gated($clip, "wood"), options: ["wood", "red", "blue", "mint", "pink", "black"].map { Swatch(id: $0, color: clipColors[$0]!.0) })
+            } label: { row("Clips", unlock: true) }
         } footer: { Text("To resize one photo, scroll over it, pinch on the trackpad, or right-click it and choose Size.") }
         Section {
-            Picker(selection: $font) { ForEach(handwritingFonts, id: \.1) { Text($0.0).tag($0.1) } }
-                label: { row("Handwriting", "pencil.and.scribble", .indigo) }
+            Picker(selection: gated($font, "Kalam-Regular")) { ForEach(handwritingFonts, id: \.1) { Text($0.0).tag($0.1) } }
+                label: { row("Handwriting", unlock: true) }
             Text("Summer at Grandma's")
-                .font(Font(handwriting(24, font: font))).foregroundStyle(Color(nsColor: ink))
+                .font(Font(handwriting(24, font: pro ? font : "Kalam-Regular"))).foregroundStyle(Color(nsColor: ink))
                 .frame(maxWidth: .infinity).padding(.vertical, 12)
                 .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color(red: 0.985, green: 0.98, blue: 0.965)))
                 .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.black.opacity(0.08)))
@@ -211,33 +221,122 @@ struct SettingsView: View {
             } label: { row("Strength", "gauge.with.dots.needle.33percent", .teal.opacity(0.75)) }
             .disabled(!breeze)
         }
-        Section {
+        if onThisDayReady { Section {
             Toggle(isOn: $onThisDay) { row("On this day", "calendar", .red) }
-        } footer: { Text("Each morning, a photo taken on this date in an earlier year is clipped on from your Photos library. It goes the next day, unless you choose Keep on String.") }
+        } footer: { Text("Each morning, a photo taken on this date in an earlier year is clipped on from your Photos library. It goes the next day, unless you right-click it and choose Keep on String.") } }
         Section {
-            Toggle(isOn: $birthdays) { row("Birthday sparkle", "birthday.cake.fill", .pink) }
+            Toggle(isOn: gated($birthdays, false)) { row("Birthday sparkle", unlock: true) }
         } footer: { Text("Right-click a photo and choose Edit Caption & Note to add a birthday. On the day, the photo glows and confetti falls.") }
         Section {
-            Picker(selection: $festival) {
+            Picker(selection: gated($festival, "off")) {
                 Text("Automatic").tag("auto"); Text("Off").tag("off"); Divider()
                 Text("Diwali diyas").tag("diwali"); Text("Christmas stars and snow").tag("christmas")
                 Text("Holi colours").tag("holi"); Text("Winter snow").tag("winter")
-            } label: { row("Festivals", "party.popper.fill", .orange) }
+            } label: { row("Festivals", unlock: true) }
         } footer: { Text("Automatic decorates the string for Diwali, Holi and Christmas on their dates.") }
     }
 
     @ViewBuilder var about: some View {
         Section {
-            LabeledContent { Text(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0") }
-                label: { row("Version", "info.circle.fill", .gray) }
-            LabeledContent {
-                Button("Share…") { (NSApp.delegate as? App)?.shareString() }
-            } label: { row("Share a picture of your string", "square.and.arrow.up.fill", .blue) }
+            if pro {
+                LabeledContent("Picture-Line") { Text("Unlocked. Thank you.") }
+                if let o = License.owner, !o.isEmpty { LabeledContent("Licensed to") { Text(o) } }
+            } else {
+                LabeledContent {
+                    Button("Unlock…") { (NSApp.delegate as? App)?.showPaywall() }
+                } label: { Text("Free: up to 5 photos") }
+            }
+            LabeledContent("Version") { Text(appVersion) }
         } footer: { Text("Your photos stay on this Mac. Picture-Line has no account and uploads nothing.") }
-        Section("Fonts") {
-            Text("Fraunces, Kalam, Patrick Hand, Caveat and Farsan are used under the SIL Open Font Licence. The licence texts are inside the app.")
-                .font(.callout).foregroundStyle(.secondary)
+        Section {
+            LabeledContent("Questions or a problem?") { Link("Write to us", destination: URL(string: "mailto:\(supportEmail)?subject=Picture-Line")!) }
+            LabeledContent("Privacy") { Link("Privacy policy", destination: siteURL.appendingPathComponent("privacy")) }
+            LabeledContent("Fonts") {
+                Button("Show Licences") {
+                    if let u = Bundle.main.resourceURL?.appendingPathComponent("Fonts") { NSWorkspace.shared.open(u) }
+                }
+            }
+        } header: { Text("Help") } footer: { Text("Fraunces, Kalam, Patrick Hand, Caveat and Farsan are used under the SIL Open Font Licence.") }
+    }
+}
+
+let appVersion: String = {
+    let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+    let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
+    return "\(v) (\(b))"
+}()
+
+/// The dusk wallpaper behind the welcome and unlock windows, so the sample string looks as it would on a desktop.
+let backdropImage: NSImage? = {
+    var urls = [Bundle.main.url(forResource: "Backdrop", withExtension: "jpg")]
+    #if DEBUG
+    urls.append(URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Design/backdrop.jpg"))
+    #endif
+    return urls.compactMap { $0 }.lazy.compactMap { NSImage(contentsOf: $0) }.first
+}()
+
+struct Backdrop: View {
+    var body: some View {
+        if let i = backdropImage { Image(nsImage: i).resizable().aspectRatio(contentMode: .fill) }
+        else { LinearGradient(colors: [Color(red: 0.95, green: 0.74, blue: 0.62), Color(red: 0.62, green: 0.56, blue: 0.72)], startPoint: .top, endPoint: .bottom) }
+    }
+}
+
+// MARK: unlock
+
+struct PaywallView: View {
+    var close: () -> Void
+    @State var key = ""
+    @State var showKey = false
+    @State var error = ""
+
+    var body: some View {
+        VStack(spacing: 0) {
+            DemoString().frame(width: 460, height: 186).padding(.top, 6)
+            VStack(spacing: 0) {
+                Text("Make room for everyone").font(Font(wordmark(30))).tracking(-0.4)
+                Text("The free string holds 5 photos. Unlock Picture-Line once to hang up to 12, and make it yours.")
+                    .multilineTextAlignment(.center).foregroundStyle(.secondary).padding(.top, 6).fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 9) {
+                    bullet("photo.stack", "Up to 12 photos on your string")
+                    bullet("party.popper", "Diwali diyas, Holi colours, Christmas stars and snow")
+                    bullet("birthday.cake", "Birthday glow and confetti for the people you love")
+                    bullet("paintpalette", "String and clip colours, frames and five handwritings")
+                    bullet("arrow.down.circle", "Every future update, included")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 16)
+                Button { License.buy(inr: false) } label: { Text("Unlock for $4.99").frame(minWidth: 210) }
+                    .buttonStyle(.borderedProminent).controlSize(.large).keyboardShortcut(.defaultAction).padding(.top, 18)
+                Button("Paying from India? ₹399 with UPI or card") { License.buy(inr: true) }.buttonStyle(.link).padding(.top, 8)
+                Label("Pay once. No subscription. Your photos stay on your Mac.", systemImage: "lock.fill")
+                    .font(.footnote).foregroundStyle(.secondary).padding(.top, 10)
+                Divider().padding(.vertical, 12)
+                if showKey {
+                    HStack {
+                        TextField("Paste your licence key", text: $key).textFieldStyle(.roundedBorder)
+                        Button("Activate") {
+                            if License.activate(key) { close() } else { error = "That key didn't work. Copy the whole key from the thank-you page." }
+                        }
+                    }
+                    if !error.isEmpty { Text(error).font(.footnote).foregroundStyle(.red).padding(.top, 6) }
+                }
+                HStack {
+                    Button(showKey ? "Hide Licence Key" : "Have a licence key?") { showKey.toggle() }.buttonStyle(.link)
+                    Spacer()
+                    Button("Not Now") { close() }.keyboardShortcut(.cancelAction)
+                }
+                .padding(.top, showKey ? 10 : 0)
+            }
+            .padding(22)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding([.horizontal, .bottom], 14)
         }
+        .frame(width: 460)
+        .background(Backdrop())
+    }
+
+    func bullet(_ icon: String, _ text: String) -> some View {
+        Label { Text(text) } icon: { Image(systemName: icon).foregroundStyle(.tint).frame(width: 20) }
     }
 }
 
@@ -302,7 +401,7 @@ struct EditView: View {
                     DatePicker("", selection: $m.birthday, displayedComponents: .date).labelsHidden().disabled(!m.hasBirthday)
                 }
             }
-            Text("On the birthday, the photo shines and confetti falls. The year is not used.")
+            Text("On the birthday, the photo glows and confetti falls. The year is not used.")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Spacer()
@@ -332,6 +431,8 @@ struct WelcomeView: View {
     var body: some View {
         VStack(spacing: 0) {
             DemoString().frame(width: 470, height: 200).padding(.horizontal, -34).padding(.top, -30)
+                .background(Backdrop().frame(width: 470, height: 230).clipped().padding(.top, -30)
+                    .mask(LinearGradient(colors: [.black, .black, .clear], startPoint: .top, endPoint: .bottom)))
             Text(appName).font(Font(wordmark(40))).tracking(-0.5).padding(.top, 2)
             Text("Your people, on a string across your desktop.")
                 .font(.title3).foregroundStyle(.secondary).padding(.top, 4)
@@ -347,7 +448,6 @@ struct WelcomeView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 option($lights, "Turn on fairy lights at sunset", "Uses your rough location, once, to know when the sun goes down.")
-                option($otd, "Clip a photo from this day each morning", "Looks through your Photos library, on this Mac only.")
                 option($samples, "Hang a few sample photos to start", "Swap them for your own whenever you like.")
                 option($login, "Open \(appName) when I log in", "So your string is there every time.")
             }

@@ -2,6 +2,7 @@
 import AppKit
 import SwiftUI
 
+#if DEBUG
 @MainActor func selfTest() {
     var ist = Calendar(identifier: .gregorian); ist.timeZone = TimeZone(identifier: "Asia/Kolkata")!
     func at(_ y: Int, _ m: Int, _ d: Int, _ h: Int = 12, _ min: Int = 0) -> Date {
@@ -31,6 +32,29 @@ import SwiftUI
 
     precondition(Sound.wav(Sound.snapSamples()).count > 1000)
     print("Self-test passed")
+}
+
+/// Dev tool: the real string with the sample photos over the dusk backdrop, for the website (2x).
+@MainActor func promo(to dir: String, size: CGSize, name: String) {
+    cfg.lights = "always"; cfg.lightColor = "warm"
+    let v = StringView(frame: NSRect(origin: .zero, size: size))
+    v.backdrop = true
+    v.backdropImage = backdropImage?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+    UserDefaults.standard.removeObject(forKey: "pins")
+    v.layoutRope()
+    v.photos = samplePhotos().enumerated().compactMap { k, s in
+        var r = PhotoRecord(file: s.url.path, at: [9, 16, 23, 30, 37, 44, 51][k])
+        r.caption = s.caption; r.scale = Double(size.height / 560); r.added = .distantPast
+        let p = Photo(r); p?.angle = [0.08, -0.06, 0.1, -0.04, 0.07, -0.09, 0.05][k]; return p
+    }
+    v.refreshClock(force: true); v.lightLevel = 1
+    for _ in 0..<1200 { v.step() }
+    let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * 2), pixelsHigh: Int(size.height * 2), bitsPerSample: 8,
+                               samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    rep.size = size
+    v.cacheDisplay(in: v.bounds, to: rep)
+    try? rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(name).png"))
+    cfg = Config.load()
 }
 
 /// Dev tool: renders the string offscreen in a few scenes, for checking the look without touching the desktop.
@@ -89,12 +113,21 @@ import SwiftUI
     sw.orderOut(nil)
 }
 
+#endif
+
 MainActor.assumeIsolated {
     registerFonts()
+    #if DEBUG // dev-only tools, left out of release builds
     if CommandLine.arguments.contains("--selftest") { selfTest(); exit(0) }
     if let i = CommandLine.arguments.firstIndex(of: "--snapshot") { snapshots(to: CommandLine.arguments[i + 1]); exit(0) }
+    if let i = CommandLine.arguments.firstIndex(of: "--promo") {
+        promo(to: CommandLine.arguments[i + 1], size: CGSize(width: 1200, height: 500), name: "app-shot")
+        promo(to: CommandLine.arguments[i + 1], size: CGSize(width: 1200, height: 630), name: "og")
+        exit(0)
+    }
+    #endif
     let delegate = App()
     NSApplication.shared.delegate = delegate
     NSApplication.shared.setActivationPolicy(.accessory) // menu bar only, no Dock icon
-    NSApplication.shared.run()
+    withExtendedLifetime(delegate) { NSApplication.shared.run() }
 }

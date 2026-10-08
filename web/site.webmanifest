@@ -1,0 +1,13 @@
+{
+  "name": "Picture-Line",
+  "short_name": "Picture-Line",
+  "description": "Your favourite photos on a string across your Mac desktop.",
+  "start_url": "/",
+  "display": "browser",
+  "background_color": "#faf7f1",
+  "theme_color": "#dde3d5",
+  "icons": [
+    { "src": "/img/icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "/img/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

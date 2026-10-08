@@ -102,9 +102,11 @@ let handwritingFonts = [("Kalam", "Kalam-Regular"), ("Patrick Hand", "PatrickHan
                         ("Noteworthy", "Noteworthy-Light"), ("Bradley Hand", "BradleyHandITCTT-Bold")]
 
 func registerFonts() {
-    let exe = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
-    for dir in [Bundle.main.resourceURL?.appendingPathComponent("Fonts"), exe.appendingPathComponent("Fonts"),
-                URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Fonts")].compactMap({ $0 }) {
+    var dirs = [Bundle.main.resourceURL?.appendingPathComponent("Fonts")]
+    #if DEBUG // dev builds run from the source folder
+    dirs.append(URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Fonts"))
+    #endif
+    for dir in dirs.compactMap({ $0 }) {
         for f in (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [] where f.pathExtension == "ttf" {
             CTFontManagerRegisterFontsForURL(f as CFURL, .process, nil)
         }
@@ -204,10 +206,10 @@ func wordmark(_ size: CGFloat) -> NSFont {
 @MainActor func drawClip(_ c: CGContext) {
     let (fill, edge) = clipColors[cfg.clip] ?? clipColors["wood"]!
     let body = CGPath(roundedRect: CGRect(x: -4.5, y: -9, width: 9, height: 25), cornerWidth: 2.5, cornerHeight: 2.5, transform: nil)
-    c.saveGState()
-    c.setShadow(offset: CGSize(width: 0, height: -1.5), blur: 2, color: rgb(0, 0, 0, 0.35))
-    c.setFillColor(fill); c.addPath(body); c.fillPath()
+    c.saveGState(); c.translateBy(x: 0.6, y: 1.6) // offset shadow, no blur
+    c.setFillColor(rgb(0, 0, 0, 0.22)); c.addPath(body); c.fillPath()
     c.restoreGState()
+    c.setFillColor(fill); c.addPath(body); c.fillPath()
     c.setStrokeColor(edge); c.setLineWidth(0.8); c.addPath(body); c.strokePath()
     c.setLineWidth(0.6); c.move(to: CGPoint(x: 0, y: -8)); c.addLine(to: CGPoint(x: 0, y: 15)); c.strokePath()
     c.setFillColor(rgb(0.74, 0.75, 0.77)); c.fill(CGRect(x: -5.5, y: 1, width: 11, height: 2.4)) // steel spring
