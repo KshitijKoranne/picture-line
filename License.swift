@@ -1,5 +1,5 @@
 // Picture-Line — the unlock for the direct-download build.
-// A licence is base64url(JSON) + "." + base64url(Ed25519 signature), issued by the website after a Razorpay payment
+// A licence is base64url(JSON) + "." + base64url(Ed25519 signature), issued by the website after a Dodo Payments purchase
 // and checked here offline. The Mac App Store build will use StoreKit instead (compile with -D APPSTORE).
 import AppKit
 import CryptoKit
