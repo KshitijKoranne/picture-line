@@ -334,10 +334,10 @@ struct Particle {
 
     func updateParticles(_ dt: CGFloat) {
         let snowing = festival == .christmas || festival == .winter
-        if snowing, awake, particles.count < 170, Double.random(in: 0...1) < 0.5 {
+        if snowing, awake, particles.count < 110, Double.random(in: 0...1) < 0.35 {
             particles.append(Particle(p: CGPoint(x: .random(in: 0...bounds.width), y: -6),
                                       v: CGPoint(x: .random(in: -8...8), y: .random(in: 22...40)),
-                                      life: 40, kind: .snow, color: .white, size: .random(in: 1.3...3.2)))
+                                      vr: .random(in: -0.8...0.8), life: 40, kind: .snow, color: .white, size: .random(in: 3...7)))
         }
         if festival == .holi, awake, time > nextPuff, let i = (2..<n - 2).randomElement() {
             nextPuff = time + .random(in: 0.8...1.8); puff(at: pts[i])
@@ -346,7 +346,7 @@ struct Particle {
             if snow[i] > 0.4, (pts[i] - old[i]).len > 1.4 {
                 snow[i] *= 0.65
                 particles.append(Particle(p: pts[i], v: CGPoint(x: .random(in: -10...10), y: .random(in: 30...60)),
-                                          life: 30, kind: .snow, color: .white, size: .random(in: 1.5...2.8)))
+                                          vr: 1, life: 30, kind: .snow, color: .white, size: .random(in: 2.5...4.5)))
             }
             snow[i] = max(0, snow[i] - (snowing ? 0.0005 : 0.01))
         }
@@ -360,7 +360,7 @@ struct Particle {
             case .puff:
                 q.p = q.p + q.v * dt; q.size += 14 * dt
             case .snow:
-                q.p.x += (q.v.x + CGFloat(sin(time * 1.3 + Double(q.seed))) * 10) * dt; q.p.y += q.v.y * dt
+                q.p.x += (q.v.x + CGFloat(sin(time * 1.3 + Double(q.seed))) * 10) * dt; q.p.y += q.v.y * dt; q.rot += q.vr * dt
                 for i in 0..<n - 1 {
                     let a = pts[i], b = pts[i + 1]
                     guard q.p.x >= min(a.x, b.x), q.p.x <= max(a.x, b.x), abs(b.x - a.x) > 0.1 else { continue }
@@ -483,11 +483,12 @@ struct Particle {
 
         switch festival {
         case .diwali:
-            for i in decorationSpots(from: 6, every: 9) {
-                c.saveGState(); c.translateBy(x: pts[i].x, y: pts[i].y); c.scaleBy(x: 1.3, y: 1.3)
-                drawDiya(c, .zero, time: time, seed: Double(i)); c.restoreGState()
+            for i in decorationSpots(from: 6, every: 9) { drawDiya(c, pts[i], time: time, seed: Double(i)) }
+        case .christmas:
+            for (k, i) in decorationSpots(from: 4, every: 8).enumerated() {
+                if k % 3 == 0 { drawStar(c, pts[i], time: time, seed: Double(i), night: lightLevel) }
+                else { drawOrnament(c, pts[i], cane: k % 3 == 2, time: time, seed: Double(i)) }
             }
-        case .christmas: for i in decorationSpots(from: 4, every: 8) { drawStar(c, pts[i], time: time, seed: Double(i), night: lightLevel) }
         default: break
         }
 
@@ -522,9 +523,10 @@ struct Particle {
         for q in particles {
             let fade = min(1, max(0, (bounds.height - q.p.y) / 140)) * min(1, (q.life - q.age) / 1.2)
             switch q.kind {
-            case .snow:
-                c.setFillColor(rgb(1, 1, 1, 0.9 * fade))
-                c.fillEllipse(in: CGRect(x: q.p.x - q.size, y: q.p.y - q.size, width: q.size * 2, height: q.size * 2))
+            case .snow: // a real flake, turning as it falls
+                guard let flake = deco("flake", px: 32) else { continue }
+                c.saveGState(); c.translateBy(x: q.p.x, y: q.p.y); c.rotate(by: q.rot); c.setAlpha(0.9 * fade)
+                c.draw(flake, in: CGRect(x: -q.size, y: -q.size, width: q.size * 2, height: q.size * 2)); c.restoreGState()
             case .confetti:
                 c.saveGState(); c.translateBy(x: q.p.x, y: q.p.y); c.rotate(by: q.rot)
                 c.setFillColor(q.color.copy(alpha: fade)!)

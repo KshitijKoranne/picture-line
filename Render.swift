@@ -1,5 +1,6 @@
 // Picture-Line — photo cards and decorations.
 import AppKit
+import ImageIO
 
 func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> CGColor {
     CGColor(srgbRed: r, green: g, blue: b, alpha: a)
@@ -260,32 +261,48 @@ func withShadow(_ img: CGImage, scale: CGFloat = 2) -> CGImage? {
     c.restoreGState()
 }
 
-@MainActor func drawDiya(_ c: CGContext, _ p: CGPoint, time: Double, seed: Double) {
-    let base = CGPoint(x: p.x, y: p.y + 22)
-    c.setStrokeColor(rgb(0.85, 0.62, 0.18, 0.9)); c.setLineWidth(0.8)
-    c.move(to: p); c.addLine(to: CGPoint(x: base.x - 6, y: base.y)); c.move(to: p); c.addLine(to: CGPoint(x: base.x + 6, y: base.y)); c.strokePath()
-    let f = CGFloat(1 + 0.12 * sin(time * 13 + seed) + 0.08 * sin(time * 23 + seed * 3))
-    glow(c, CGPoint(x: base.x, y: base.y - 5), rgb(1, 0.62, 0.15), 30 * f, 0.38)
-    let bowl = CGMutablePath()
-    bowl.move(to: CGPoint(x: base.x - 10, y: base.y))
-    bowl.addQuadCurve(to: CGPoint(x: base.x + 10, y: base.y), control: CGPoint(x: base.x, y: base.y + 13))
-    bowl.addLine(to: CGPoint(x: base.x + 13, y: base.y - 2.5)) // spout
-    bowl.addQuadCurve(to: CGPoint(x: base.x - 10, y: base.y), control: CGPoint(x: base.x, y: base.y + 1.5))
-    c.saveGState()
-    c.setShadow(offset: CGSize(width: 0, height: -2), blur: 3, color: rgb(0, 0, 0, 0.4))
-    c.setFillColor(rgb(0.72, 0.33, 0.16)); c.addPath(bowl); c.fillPath()
+// Festival sprites (Resources/Deco), decoded once at the size they are drawn.
+private var decoCache: [String: CGImage] = [:]
+@MainActor func deco(_ name: String, px: Int) -> CGImage? {
+    let key = "\(name)@\(px)"
+    if let i = decoCache[key] { return i }
+    var url = Bundle.main.url(forResource: name, withExtension: "png", subdirectory: "Deco")
+    #if DEBUG
+    if url == nil { url = URL(fileURLWithPath: "Deco/\(name).png") }
+    #endif
+    guard let u = url, let src = CGImageSourceCreateWithURL(u as CFURL, nil),
+          let img = CGImageSourceCreateThumbnailAtIndex(src, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                                               kCGImageSourceThumbnailMaxPixelSize: px] as CFDictionary) else { return nil }
+    decoCache[key] = img
+    return img
+}
+
+/// A clay diya hung on three threads, with a flame that breathes.
+@MainActor func drawDiya(_ c: CGContext, _ hang: CGPoint, time: Double, seed: Double) {
+    guard let img = deco("diya", px: 120) else { return }
+    let w: CGFloat = 50, h = w * CGFloat(img.height) / CGFloat(img.width), drop: CGFloat = 20
+    let sway = CGFloat(sin(time * 0.9 + seed) * 0.06)
+    let f = CGFloat(1 + 0.12 * sin(time * 11 + seed) + 0.07 * sin(time * 23 + seed * 3))
+    c.saveGState(); c.translateBy(x: hang.x, y: hang.y); c.rotate(by: sway)
+    c.setStrokeColor(rgb(0.94, 0.75, 0.35, 0.75)); c.setLineWidth(0.8)
+    for fx: CGFloat in [-0.42, 0, 0.42] { c.move(to: .zero); c.addLine(to: CGPoint(x: fx * w, y: drop + h * 0.28)) }
+    c.strokePath()
+    let r = CGRect(x: -w / 2, y: drop, width: w, height: h)
+    glow(c, CGPoint(x: r.minX + w * 0.78, y: r.minY + h * 0.18), rgb(1, 0.62, 0.15), w * 1.1 * f, 0.5)
+    put(c, img, r)
+    glow(c, CGPoint(x: r.minX + w * 0.8, y: r.minY + h * 0.14), rgb(1, 0.95, 0.75), w * 0.22 * f, 0.55)
     c.restoreGState()
-    c.setStrokeColor(rgb(0.95, 0.75, 0.25)); c.setLineWidth(1)
-    c.move(to: CGPoint(x: base.x - 6, y: base.y + 4)); c.addLine(to: CGPoint(x: base.x + 6, y: base.y + 4)); c.strokePath()
-    let tip = CGPoint(x: base.x + 11 + CGFloat(sin(time * 9 + seed)) * 0.8, y: base.y - 3 - 11 * f)
-    let flame = CGMutablePath()
-    flame.move(to: CGPoint(x: base.x + 8.5, y: base.y - 2.5))
-    flame.addQuadCurve(to: tip, control: CGPoint(x: base.x + 6, y: base.y - 9))
-    flame.addQuadCurve(to: CGPoint(x: base.x + 13, y: base.y - 2.5), control: CGPoint(x: base.x + 15, y: base.y - 9))
-    flame.closeSubpath()
-    c.setFillColor(rgb(1, 0.72, 0.18)); c.addPath(flame); c.fillPath()
-    c.saveGState(); c.translateBy(x: base.x + 10.8, y: base.y - 4); c.scaleBy(x: 0.45, y: 0.5); c.translateBy(x: -(base.x + 10.8), y: -(base.y - 4))
-    c.setFillColor(rgb(1, 0.97, 0.8)); c.addPath(flame); c.fillPath(); c.restoreGState()
+}
+
+/// A red bauble on its thread, or a candy cane hooked over the string.
+@MainActor func drawOrnament(_ c: CGContext, _ hang: CGPoint, cane: Bool, time: Double, seed: Double) {
+    guard let img = deco(cane ? "cane" : "bauble", px: 140) else { return }
+    let h: CGFloat = cane ? 62 : 52, w = h * CGFloat(img.width) / CGFloat(img.height)
+    let sway = CGFloat(sin(time * 0.9 + seed) * 0.1) + (cane ? 0.12 : 0)
+    c.saveGState(); c.translateBy(x: hang.x, y: hang.y); c.rotate(by: sway)
+    c.setShadow(offset: CGSize(width: 0, height: 2), blur: 3, color: rgb(0, 0, 0, 0.35))
+    put(c, img, cane ? CGRect(x: -w * 0.53, y: -h * 0.07, width: w, height: h) : CGRect(x: -w / 2, y: -1, width: w, height: h))
+    c.restoreGState()
 }
 
 func starPath(_ center: CGPoint, _ r: CGFloat, points: Int = 5, inner: CGFloat = 0.45, angle: CGFloat = 0) -> CGPath {

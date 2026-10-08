@@ -25,7 +25,7 @@ mkdir -p "$A/Contents/MacOS" "$A/Contents/Resources"
 cp "build/$EXE" "$A/Contents/MacOS/"
 cp Info.plist "$A/Contents/"
 cp AppIcon.icns PrivacyInfo.xcprivacy "$A/Contents/Resources/"
-cp -R Fonts Samples "$A/Contents/Resources/"
+cp -R Fonts Samples Deco "$A/Contents/Resources/"
 cp Design/backdrop.jpg "$A/Contents/Resources/Backdrop.jpg"
 xattr -cr "$A"
 
