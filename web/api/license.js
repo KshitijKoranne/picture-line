@@ -96,17 +96,17 @@ function page(res, status, { title, body, nonce, refresh, csp }) {
 ${refresh ? `<meta http-equiv="refresh" content="${refresh}">` : ''}
 <title>${esc(title)} | Picture-Line</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,580,50&amp;family=Kalam&amp;display=swap">
-<link rel="stylesheet" href="/css/site.css?v=1">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Figtree:wght@400;500;600;700&amp;family=Kalam&amp;display=swap">
+<link rel="stylesheet" href="/css/site.css?v=2">
 <link rel="icon" href="/favicon.ico" sizes="32x32">
 </head>
 <body>
-<header class="top"><div class="wrap"><a class="brand" href="/"><img src="/img/icon-32.png" width="28" height="28" alt="">Picture-Line</a></div></header>
+<header class="top"><div class="wrap"><a class="brand" href="/"><img src="/img/logo-64.png" width="32" height="32" alt="">Picture-Line</a></div></header>
 <main id="main" class="page"><div class="wrap">
 ${body}
 </div></main>
 <footer class="foot"><div class="wrap"><div><p>Questions about a payment? Write to <a href="mailto:${SUPPORT}">${SUPPORT}</a>.</p>
-<p><a href="/refunds">Refunds</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></p></div></div></footer>
+<p><a href="/refunds">Cancellations</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></p></div></div></footer>
 </body>
 </html>`);
 }
@@ -225,7 +225,7 @@ async function showKey(res, cfg, id, fresh) {
       body: `<h1>Confirming your payment</h1><p class="lede">Your payment was received and Razorpay is confirming it. This page refreshes by itself and your key will appear here, usually within a minute.</p>
 <p>Payment ID: <strong>${esc(id)}</strong>. If you close this page, you can come back to it from the <a href="/key">find my key</a> page.</p>`,
     });
-    case 'refunded': return note(res, 410, 'This purchase was refunded', 'There\'s no licence key for a refunded payment. The free version of Picture-Line keeps working.',
+    case 'refunded': return note(res, 410, 'This payment was returned', 'There\'s no licence key for a returned payment. The free version of Picture-Line keeps working.',
       `<p class="small">Think this is a mistake? Write to <a href="mailto:${SUPPORT}">${SUPPORT}</a> with the payment ID.</p>`);
     case 'other': return note(res, 404, 'That payment isn\'t for Picture-Line', 'The payment ID exists, but it wasn\'t for the Picture-Line unlock.', tryAgain);
     case 'unpaid': return note(res, 402, 'That payment didn\'t complete', 'Razorpay says this payment wasn\'t completed, so no money was taken for it.',
