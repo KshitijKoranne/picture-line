@@ -84,7 +84,9 @@ body:has(.page) .top { position: relative; background: var(--paper); border-bott
   position: relative; overflow: hidden; min-height: min(100svh, 920px);
   background: var(--dusk-hi) url("/img/dusk.jpg") center bottom / cover no-repeat;
   display: flex; align-items: flex-end;
+  padding-top: 340px; /* room for the string, so the photos never cover the headline */
 }
+@media (max-width: 640px) { .hero { padding-top: 250px; } }
 @media (max-width: 699px) { .hero { background-image: url("/img/dusk-900.jpg"); } }
 .hero::after { /* a soft fade at the foot so the paper section rises out of the dusk */
   content: ""; position: absolute; inset: auto 0 0; height: 120px; pointer-events: none;

@@ -99,12 +99,12 @@
     function layout(force) {
       W = sec.clientWidth; H = sec.clientHeight;
       if (!W || !H) return;
-      const key = W + 'x' + Math.round(H / 40);
+      const [y0, bottom] = opts.band(W, H);
+      const key = W + 'x' + Math.round(H / 40) + 'x' + Math.round(bottom / 8); // the copy moves when web fonts arrive
       if (!force && key === lastSize) return;
       lastSize = key;
       dpr = Math.min(2, window.devicePixelRatio || 1);
       cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
-      const [y0, bottom] = opts.band(W, H);
       const count = Math.min(items.length, W < 430 ? 3 : W < 660 ? 4 : W < 980 ? 5 : 7);
       const room = bottom - y0;
       cw = Math.round(clamp(Math.min(W / (count + 2.4) * 0.82, (room - 30) / 1.21 / 1.35), 72, 118));
@@ -137,11 +137,14 @@
       items.forEach(it => { if (it.btn) it.btn.hidden = !shown.includes(it); });
       photos.forEach(buildCard);
       const keep = inside; inside = false;
-      for (let pass = 0; pass < 4; pass++) { // the photos pull the rope down: shorten it until the lowest card clears the copy
+      for (let pass = 0; pass < 8; pass++) { // the photos pull the rope down: shorten it, then shrink the cards, until they clear the copy
         for (let k = 0; k < 300; k++) step(true);
         const over = Math.max(...photos.map(p => pts[p.at].y + HANG + ch)) - bottom;
-        if (over <= 0 || d <= 12) break;
-        d = Math.max(12, d - over * 1.3); hangRope();
+        if (over <= 0) break;
+        if (d > 12) d = Math.max(12, d - over * 1.3);
+        else if (cw > 64) { cw = Math.max(64, Math.round(cw * 0.92)); ch = Math.round(cw * 1.21); photos.forEach(buildCard); }
+        else break;
+        hangRope();
       }
       inside = keep;
       for (const p of photos) { p.spin = 0; p.lvx = p.lvy = 0; p.angle = reduce || !first ? 0 : (Math.random() - 0.5) * 0.5; }
@@ -195,7 +198,7 @@
         const p = pts[i], o = old[i];
         const vx = (p.x - o.x) * 0.985, vy = (p.y - o.y) * 0.985;
         o.x = p.x; o.y = p.y;
-        p.x += vx; p.y += vy + (G + wt[i] * 900 + snow[i] * 30) * DT * DT;
+        p.x += vx; p.y += vy + (G + wt[i] * 500 + snow[i] * 30) * DT * DT;
         if (grabbed < 0 && hover && (p.x - mouse.x) ** 2 + (p.y - mouse.y) ** 2 < 1600) { p.x += mvx * 0.22; p.y += mvy * 0.22; }
       }
       if (grabbed > 0) {
@@ -204,7 +207,7 @@
         p.x = clamp(mouse.x + grabOff.x, 0, W); p.y = clamp(mouse.y + grabOff.y, 10, H - ch - 20);
       }
       pts[0] = { x: pinA.x, y: pinA.y }; pts[N - 1] = { x: pinB.x, y: pinB.y };
-      for (let it = 0; it < 20; it++) {
+      for (let it = 0; it < 40; it++) {
         for (let i = 0; i < N - 1; i++) {
           const fa = i === 0 || i === grabbed, fb = i + 1 === N - 1 || i + 1 === grabbed;
           if (fa && fb) continue;
@@ -480,12 +483,15 @@
       reduce ? draw() : poke();
     }));
     Object.values(SPR).forEach(i => i.addEventListener('load', () => draw()));
-    if ('ResizeObserver' in window) new ResizeObserver(() => { layout(false); wake(); }).observe(sec);
+    if ('ResizeObserver' in window) {
+      const ro = new ResizeObserver(() => { layout(false); wake(); });
+      ro.observe(sec); if (opts.copy) ro.observe(opts.copy);
+    }
     if ('IntersectionObserver' in window) new IntersectionObserver(es => { onScreen = es[0].isIntersecting; if (onScreen) poke(); }).observe(sec);
     layout(true);
 
     return {
-      fonts() { photos.forEach(buildCard); draw(); poke(); },
+      fonts() { layout(false); photos.forEach(buildCard); draw(); poke(); },
       wake: poke,
       setFest(f) {
         fest = f || null;
@@ -516,7 +522,7 @@
   if (hero && heroCv && heroCv.getContext) {
     const copy = hero.querySelector('.hero-copy');
     strings.push(makeString(hero, heroCv, {
-      light: 1, dark: false, tilt: 10,
+      light: 1, dark: false, tilt: 10, copy,
       band: (W, H) => [W < 640 ? 84 : 96, Math.max(260, (copy ? copy.offsetTop : H * 0.5) - 8)],
     }));
   }
@@ -524,7 +530,7 @@
   if (night && nightCv && nightCv.getContext) {
     const copy = night.querySelector('.night-copy');
     const s = makeString(night, nightCv, {
-      light: 1, dark: true, fest: 'diwali', tilt: -8,
+      light: 1, dark: true, fest: 'diwali', tilt: -8, copy,
       band: (W, H) => [44, Math.max(240, (copy ? copy.offsetTop : H * 0.5) - 10)],
     });
     strings.push(s);
@@ -536,7 +542,7 @@
   }
   if (document.fonts && document.fonts.load) {
     const done = () => { fontsReady = true; strings.forEach(s => s.fonts()); };
-    document.fonts.load('20px Kalam').then(done, done);
+    Promise.all([document.fonts.load('20px Kalam'), document.fonts.ready]).then(done, done);
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) strings.forEach(s => s.wake()); });
 

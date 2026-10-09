@@ -104,7 +104,7 @@ ${refresh ? `<meta http-equiv="refresh" content="${refresh}">` : ''}
 <title>${esc(title)} | Picture-Line</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Figtree:wght@400;500;600;700&amp;family=Kalam&amp;display=swap">
-<link rel="stylesheet" href="/css/site.css?v=2">
+<link rel="stylesheet" href="/css/site.css?v=3">
 <link rel="icon" href="/favicon.ico" sizes="32x32">
 </head>
 <body>
